@@ -8,6 +8,13 @@ version = "0.1.0"
 description = "Convert PennyLane circuits to einsum expressions."
 readme = "README.md"
 requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "gilbert", email = "gilbert12.tw@gmail.com"}]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Scientific/Engineering :: Physics",
+]
 dependencies = [
   "pennylane>=0.37",
   "numpy>=1.23",
@@ -19,7 +26,10 @@ dev = [
   "opt_einsum>=3.3.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/gilbert/pennylane-einsum"
+Repository = "https://github.com/gilbert/pennylane-einsum"
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["converter*"]
-
+include = ["pennylane_einsum*"]
