@@ -1,6 +1,6 @@
-# PennyLane Circuit to Einsum 
+# PennyLane Circuit to Einsum
 
-This repo provides a minimal converter that turns PennyLane circuits into einsum expressions and tensors, so you can contract them with `numpy`, `opt_einsum`, or `cotengra`.
+Convert PennyLane circuits into einsum expressions and tensors, so you can contract them with `numpy`, `opt_einsum`, or `cotengra`.
 
 ## Install (dev)
 
@@ -12,7 +12,7 @@ pip install -e ".[dev]"
 
 ```python
 import pennylane as qml
-from converter import CircuitToEinsum, contract_einsum
+from pennylane_einsum import CircuitToEinsum, contract_einsum
 
 def circuit():
     qml.Hadamard(wires=0)
@@ -27,12 +27,11 @@ result = contract_einsum(expr, tensors, optimize="optimal")
 print(result.reshape(-1))
 ```
 
-## Supported Gates (MVP)
+## Supported Gates
 
-- Single-qubit: H, X, Y, Z, RX, RY, RZ
-- Two-qubit: CNOT, CZ, SWAP
-
-These are supported as long as `op.matrix()` is available in PennyLane.
+Any gate that implements `op.matrix()` in PennyLane is supported, including
+multi-qubit gates like Toffoli. This covers all standard single- and multi-qubit
+unitary gates (H, X, Y, Z, RX, RY, RZ, CNOT, CZ, SWAP, Toffoli, and more).
 
 ## Tests
 
@@ -51,16 +50,11 @@ tensor layout, and current limitations.
 python examples/basic_circuits.py
 ```
 
-## Notes
+## Unsupported Operations
 
-- The converter currently supports only 1- and 2-qubit gates.
-- Larger multi-qubit gates can be added by extending tensor reshaping rules.
-
-## Unsupported Syntax/Gates (Current MVP)
-
-- State preparation ops (e.g., `BasisState`, `StatePrep`, `QubitStateVector`).
+- State preparation ops (`BasisState`, `StatePrep`, `QubitStateVector`).
 - Operations without a matrix representation via `op.matrix()`.
-- Measurements/observables and mid-circuit measurement flows.
+- Measurements, observables, and mid-circuit measurement flows.
 - Operations with `num_wires = AnyWires` unless they provide a matrix for a fixed wire count.
 
 ## Scan Unsupported Ops
@@ -68,5 +62,3 @@ python examples/basic_circuits.py
 ```bash
 python scripts/scan_unsupported_ops.py
 ```
-
-****
