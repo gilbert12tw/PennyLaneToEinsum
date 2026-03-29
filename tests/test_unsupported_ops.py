@@ -1,7 +1,7 @@
 import pytest
 import pennylane as qml
 
-from converter import CircuitToEinsum
+from pennylane_einsum import CircuitToEinsum
 
 
 def test_three_qubit_gate_supported():

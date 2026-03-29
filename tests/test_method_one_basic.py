@@ -1,7 +1,7 @@
 import numpy as np
 import pennylane as qml
 
-from converter import CircuitToEinsum
+from pennylane_einsum import CircuitToEinsum
 
 
 def _compare_state(circuit_func, n_qubits, params=None, atol=1e-7):

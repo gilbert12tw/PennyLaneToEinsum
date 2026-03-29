@@ -1,7 +1,7 @@
 import numpy as np
 import pennylane as qml
 
-from converter import CircuitToEinsum
+from pennylane_einsum import CircuitToEinsum
 
 
 def test_toffoli_state_matches():
