@@ -1,7 +1,7 @@
 import numpy as np
 import pennylane as qml
 
-from converter import CircuitToEinsum, contract_einsum
+from pennylane_einsum import CircuitToEinsum, contract_einsum
 
 
 def simple_circuit():
