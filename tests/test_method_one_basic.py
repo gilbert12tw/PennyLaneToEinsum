@@ -2,7 +2,7 @@ import numpy as np
 import pennylane as qml
 
 from pennylane_einsum import CircuitToEinsum
-from pennylane_einsum.circuit_to_einsum import contract_einsum
+from pennylane_einsum.circuit_to_einsum import contract_einsum, build_batch_einsum
 
 
 def _compare_state(circuit_func, n_qubits, params=None, atol=1e-7):
@@ -95,3 +95,55 @@ def test_large_circuit_52_plus_indices():
 
     pl_state = pennylane_circuit()
     assert np.allclose(einsum_state, pl_state, atol=1e-7)
+
+
+def test_parametric_gate_detection():
+    def circuit(theta):
+        qml.Hadamard(wires=0)
+        qml.RY(theta, wires=0)
+        qml.CNOT(wires=[0, 1])
+        qml.RZ(theta / 2, wires=1)
+
+    converter = CircuitToEinsum.for_qubits(2)
+    einsum_data = converter.circuit_to_einsum(circuit, params=[0.5])
+
+    param_ops = [op for op in einsum_data["operations"] if op["num_params"] > 0]
+    fixed_ops = [op for op in einsum_data["operations"] if op["num_params"] == 0]
+
+    assert len(param_ops) == 2, "Should have 2 parametric gates (RY, RZ)"
+    assert len(fixed_ops) == 2, "Should have 2 fixed gates (Hadamard, CNOT)"
+
+    assert all(op["num_params"] == 1 for op in param_ops)
+    assert all(isinstance(op["op_class"], type) for op in param_ops)
+
+
+def test_build_batch_einsum():
+    def circuit(theta):
+        qml.Hadamard(wires=0)
+        qml.RY(theta, wires=0)
+        qml.CNOT(wires=[0, 1])
+
+    converter = CircuitToEinsum.for_qubits(2)
+    einsum_data = converter.circuit_to_einsum(circuit, params=[0.5])
+
+    batch_size = 4
+    batch_thetas = np.random.randn(batch_size)
+
+    def make_batch_params(op_idx, op_cls, op_params):
+        if op_cls.__name__ == "RY":
+            matrices = np.stack([qml.RY(t, wires=0).matrix() for t in batch_thetas])
+            return matrices.reshape(batch_size, 2, 2)
+        return None
+
+    expr, batch_tensors = build_batch_einsum(einsum_data, make_batch_params)
+
+    assert len(batch_tensors) == len(einsum_data["operations"]) + 1
+    assert batch_tensors[0].shape == (2, 2)
+    assert batch_tensors[1].shape == (2, 2)
+    assert batch_tensors[2].shape == (batch_size, 2, 2)
+    assert batch_tensors[3].shape == (2, 2, 2, 2)
+
+    param_indices = {
+        i for i, op in enumerate(einsum_data["operations"]) if op["num_params"] > 0
+    }
+    assert param_indices == {1}, f"Expected {{1}} (RY gate), got {param_indices}"

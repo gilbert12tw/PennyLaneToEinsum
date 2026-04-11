@@ -65,6 +65,66 @@ def contract_einsum(
         return oe.contract(einsum_expr, *tensors, optimize=optimize)
 
 
+ParamBatchFn = Callable[[int, type, List[Any]], Optional[np.ndarray]]
+
+
+def build_batch_einsum(
+    einsum_data: Dict[str, Any],
+    params_batch_fn: ParamBatchFn,
+    initial_state: Optional[np.ndarray] = None,
+) -> Tuple[str, List[np.ndarray]]:
+    """Build einsum with batch parameters for parametric gates.
+
+    Args:
+        einsum_data: Output from circuit_to_einsum()
+        params_batch_fn: Function(op_idx, op_class, op_params) -> batch tensor or None.
+            Return None for fixed gates (the original tensor will be used).
+            Return shape (batch, 2, 2) for single-wire gates.
+        initial_state: Optional initial statevector
+
+    Returns:
+        Tuple of (einsum_expr, batch_tensors)
+
+    Example:
+        >>> def make_batch_params(op_idx, op_cls, op_params):
+        ...     if op_cls.__name__ == 'RY':
+        ...         return np.stack([qml.RY(p, wires=0).matrix() for p in batch_params[op_idx]])
+        ...     return None
+        >>>
+        >>> expr, tensors = build_batch_einsum(einsum_data, make_batch_params)
+    """
+    n_qubits = len(einsum_data["initial_indices"])
+    operations = einsum_data["operations"]
+
+    if initial_state is None:
+        state = np.zeros(2**n_qubits, dtype=complex)
+        state[0] = 1.0
+    else:
+        state = np.asarray(initial_state, dtype=complex)
+        if state.shape != (2**n_qubits,):
+            raise ValueError(
+                "initial_state must be a flat statevector of length 2**n_qubits"
+            )
+
+    batch_tensors = [state.reshape([2] * n_qubits)]
+
+    for op_idx, op_dict in enumerate(operations):
+        batch_tensor = params_batch_fn(
+            op_idx, op_dict["op_class"], op_dict["op_params"]
+        )
+        if batch_tensor is None:
+            batch_tensors.append(op_dict["tensor"])
+        else:
+            batch_tensors.append(batch_tensor)
+
+    init_idx_str = "".join(einsum_data["initial_indices"].values())
+    gate_strs = [op["einsum"].split(",")[1] for op in operations]
+    final_idx_str = "".join(einsum_data["final_indices"].values())
+    full_einsum = f"{init_idx_str},{','.join(gate_strs)}->{final_idx_str}"
+
+    return full_einsum, batch_tensors
+
+
 @dataclass
 class CircuitToEinsum:
     n_qubits: int
@@ -131,6 +191,9 @@ class CircuitToEinsum:
                     "tensor": tensor,
                     "gate_name": op.name,
                     "wires": wires,
+                    "num_params": op.num_params,
+                    "op_class": type(op),
+                    "op_params": list(op.parameters),
                 }
             )
 
