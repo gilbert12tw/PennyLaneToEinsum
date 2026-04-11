@@ -9,7 +9,9 @@ import pennylane as qml
 from .index_manager import IndexManager
 
 
-def _build_tape(circuit_func: Callable[..., Any], params: Optional[Iterable[Any]]) -> qml.tape.QuantumTape:
+def _build_tape(
+    circuit_func: Callable[..., Any], params: Optional[Iterable[Any]]
+) -> qml.tape.QuantumTape:
     with qml.tape.QuantumTape() as tape:
         if params is None:
             circuit_func()
@@ -35,13 +37,32 @@ def contract_einsum(
     tensors: List[np.ndarray],
     optimize: Optional[str] = None,
 ) -> np.ndarray:
+    """Contract tensors using einsum.
+
+    Handles large einsum expressions with >52 unique indices by using
+    opt_einsum, which automatically finds an optimal contraction path.
+    """
     if optimize is None:
-        return np.einsum(einsum_expr, *tensors)
+        try:
+            return np.einsum(einsum_expr, *tensors)
+        except UnicodeEncodeError:
+            optimize = "greedy"
+
     try:
         import opt_einsum as oe
     except Exception:
+        try:
+            return np.einsum(einsum_expr, *tensors)
+        except UnicodeEncodeError:
+            tensors = [np.asarray(t) for t in tensors]
+            return oe.contract(einsum_expr, *tensors, optimize=optimize)
         return np.einsum(einsum_expr, *tensors)
-    return oe.contract(einsum_expr, *tensors, optimize=optimize)
+
+    try:
+        return oe.contract(einsum_expr, *tensors, optimize=optimize)
+    except (UnicodeEncodeError, ValueError):
+        tensors = [np.asarray(t) for t in tensors]
+        return oe.contract(einsum_expr, *tensors, optimize=optimize)
 
 
 @dataclass
@@ -59,7 +80,9 @@ class CircuitToEinsum:
             return {int(w): int(w) for w in wire_list}
         return {wire: idx for idx, wire in enumerate(wire_list)}
 
-    def _apply_gate(self, gate_matrix: np.ndarray, wires: List[int]) -> Tuple[str, np.ndarray]:
+    def _apply_gate(
+        self, gate_matrix: np.ndarray, wires: List[int]
+    ) -> Tuple[str, np.ndarray]:
         n_wires = len(wires)
         if n_wires < 1:
             raise NotImplementedError("Gates with 0 wires not implemented")
@@ -130,7 +153,9 @@ class CircuitToEinsum:
         else:
             state = np.asarray(initial_state, dtype=complex)
             if state.shape != (2**n_qubits,):
-                raise ValueError("initial_state must be a flat statevector of length 2**n_qubits")
+                raise ValueError(
+                    "initial_state must be a flat statevector of length 2**n_qubits"
+                )
 
         tensors: List[np.ndarray] = [state.reshape([2] * n_qubits)]
         init_idx_str = "".join(einsum_data["initial_indices"].values())
@@ -138,4 +163,3 @@ class CircuitToEinsum:
         final_idx_str = "".join(einsum_data["final_indices"].values())
         full_einsum = f"{init_idx_str},{','.join(gate_strs)}->{final_idx_str}"
         return full_einsum, tensors + [op["tensor"] for op in einsum_data["operations"]]
-
