@@ -125,6 +125,49 @@ def build_batch_einsum(
     return full_einsum, batch_tensors
 
 
+def expval_hermitian_torch(
+    statevec: np.ndarray,
+    H: "torch.Tensor",
+    qubit: int,
+    n_qubits: int,
+) -> "torch.Tensor":
+    """Expectation value <psi|H_q|psi> with autograd through H.
+
+    The statevec (output of contract_einsum) is treated as a constant —
+    gradients do not flow through the circuit, only through H.
+    H is typically a slice of an nn.Parameter (e.g. LearnablePauliDirection).
+
+    Args:
+        statevec: flat numpy statevector of length 2**n_qubits
+        H: complex torch tensor of shape (2, 2); gradient-enabled
+        qubit: index of the qubit on which H acts (0-based)
+        n_qubits: total number of qubits
+
+    Returns:
+        Real torch scalar; supports .backward()
+
+    Example (GPU-transparent — works on CPU or CUDA)::
+
+        sv = contract_einsum(expr, tensors).flatten()
+        ev = expval_hermitian_torch(sv, obs_module()[q], q, n_qubits)
+        loss = some_loss(ev)
+        loss.backward()   # gradients reach obs_module.parameters()
+    """
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError(
+            "torch is required for expval_hermitian_torch; install it with: pip install torch"
+        ) from exc
+
+    sv = torch.as_tensor(statevec, dtype=H.dtype).to(H.device)
+    I2 = torch.eye(2, dtype=H.dtype, device=H.device)
+    full_op = torch.ones(1, 1, dtype=H.dtype, device=H.device)
+    for q in range(n_qubits):
+        full_op = torch.kron(full_op, H if q == qubit else I2)
+    return (sv.conj() @ full_op @ sv).real
+
+
 @dataclass
 class CircuitToEinsum:
     n_qubits: int
