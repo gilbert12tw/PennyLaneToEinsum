@@ -1,6 +1,8 @@
 # PennyLane Circuit to Einsum
 
-Convert PennyLane circuits into einsum expressions and tensors, so you can contract them with `numpy`, `opt_einsum`, or `cotengra`.
+Convert PennyLane circuits composed of matrix-defined qubit operations into an
+einsum expression and tensor list. The current output represents the final
+statevector of the circuit.
 
 ## Install (dev)
 
@@ -29,14 +31,18 @@ print(result.reshape(-1))
 
 ## Supported Gates
 
-Any gate that implements `op.matrix()` in PennyLane is supported, including
-multi-qubit gates like Toffoli. This covers all standard single- and multi-qubit
-unitary gates (H, X, Y, Z, RX, RY, RZ, CNOT, CZ, SWAP, Toffoli, and more).
+Any qubit operation that provides a dense square matrix through `op.matrix()` can
+be converted. This includes common fixed-size unitary gates such as H, X, Y, Z,
+RX, RY, RZ, CNOT, CZ, SWAP, and Toffoli.
+
+The converter is intentionally dense-matrix based. It does not decompose
+unsupported operations automatically and does not preserve PennyLane autodiff
+through gate parameters.
 
 ## Tests
 
 ```bash
-pytest
+uv run --extra dev pytest -q
 ```
 
 ## Implementation Notes
@@ -55,9 +61,21 @@ python examples/basic_circuits.py
 - State preparation ops (`BasisState`, `StatePrep`, `QubitStateVector`).
 - Operations without a matrix representation via `op.matrix()`.
 - Measurements, observables, and mid-circuit measurement flows.
-- Operations with `num_wires = AnyWires` unless they provide a matrix for a fixed wire count.
+- Channels/noisy operations and non-unitary circuit effects.
+- Automatic decomposition of templates or custom operations that do not directly
+  provide a matrix.
+
+## Experimental APIs
+
+- `build_batch_einsum` is not production-ready. It currently records batch-shaped
+  tensors but does not add batch indices to the generated einsum expression.
+- `expval_hermitian_torch` is a helper for differentiating through a Hermitian
+  observable tensor after the statevector has been produced; it does not provide
+  gradients through the converted circuit.
 
 ## Scan Unsupported Ops
+
+This script is currently a maintenance helper, not a stable user-facing command.
 
 ```bash
 python scripts/scan_unsupported_ops.py
