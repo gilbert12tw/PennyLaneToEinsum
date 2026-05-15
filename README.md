@@ -67,8 +67,6 @@ python examples/basic_circuits.py
 
 ## Experimental APIs
 
-- `build_batch_einsum` is not production-ready. It currently records batch-shaped
-  tensors but does not add batch indices to the generated einsum expression.
 - `expval_hermitian_torch` is a helper for differentiating through a Hermitian
   observable tensor after the statevector has been produced; it does not provide
   gradients through the converted circuit.

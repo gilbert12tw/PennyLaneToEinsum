@@ -18,12 +18,12 @@ classifiers = [
 dependencies = [
   "pennylane>=0.37",
   "numpy>=1.23",
+  "opt_einsum>=3.3.0",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=7.0",
-  "opt_einsum>=3.3.0",
 ]
 torch = [
     "torch>=2.8.0",

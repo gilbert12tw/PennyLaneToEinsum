@@ -1164,6 +1164,7 @@ dependencies = [
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "opt-einsum" },
     { name = "pennylane", version = "0.38.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pennylane", version = "0.42.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
     { name = "pennylane", version = "0.44.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -1171,7 +1172,6 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "opt-einsum" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
@@ -1183,7 +1183,7 @@ torch = [
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=1.23" },
-    { name = "opt-einsum", marker = "extra == 'dev'", specifier = ">=3.3.0" },
+    { name = "opt-einsum", specifier = ">=3.3.0" },
     { name = "pennylane", specifier = ">=0.37" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.8.0" },
