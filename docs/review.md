@@ -81,15 +81,11 @@ uv run --extra dev pytest -q
 `opt_einsum` 已升為 runtime dependency（`pyproject.toml`）。`contract_einsum` 已簡化
 為直接呼叫 `oe.contract`，舊的 numpy fallback 邏輯已移除。
 
-### P0: Unsupported operations 需要明確錯誤訊息
+### ~~P0: Unsupported operations 需要明確錯誤訊息~~ ✅ 已解決
 
-目前許多 unsupported case 會直接露出 PennyLane 或 NumPy 原始 exception。測試也只檢查
-`raises Exception`，沒有檢查可理解的錯誤訊息。
-
-影響：外部使用者很難分辨是超出支援範圍，還是真的 bug。
-
-建議：新增專案自己的 conversion exception，包含 operation name、wires、失敗原因與
-建議處理方式。
+新增 `UnsupportedOperationError`（`pennylane_einsum/exceptions.py`），包含 operation
+name、wires、原始失敗原因，以及支援範圍說明。`circuit_to_einsum()` 現在會捕捉所有
+`op.matrix()` 拋出的例外並包裝成此型別。已加入測試確認 exception type 與訊息內容。
 
 ### P1: 文件之前誇大且互相矛盾
 
@@ -151,7 +147,7 @@ PennyLane version range。
 
 - ~~決定 `build_batch_einsum` 要移除、隱藏，或標成 experimental。~~ ✅
 - ~~修正 `contract_einsum` 對 `opt_einsum` 的 dependency 與 fallback 行為。~~ ✅
-- 新增 project-specific conversion exception。
+- ~~新增 project-specific conversion exception。~~ ✅
 - 確保 README quick start 和測試指令能從乾淨 checkout 執行。
 
 ### P1: 強化核心 conversion correctness

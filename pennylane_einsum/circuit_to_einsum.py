@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pennylane as qml
 
+from .exceptions import UnsupportedOperationError
 from .index_manager import IndexManager
 
 
@@ -141,7 +142,14 @@ class CircuitToEinsum:
             if n_wires < 1:
                 raise NotImplementedError("Gates with 0 wires not implemented")
 
-            gate_matrix = op.matrix()
+            try:
+                gate_matrix = op.matrix()
+            except Exception as exc:
+                raise UnsupportedOperationError(
+                    op_name=op.name,
+                    wires=list(op.wires),
+                    reason=str(exc),
+                ) from exc
             wires = list(op.wires)
             if not wires:
                 raise ValueError("Operation has no wires")

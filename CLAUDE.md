@@ -78,7 +78,6 @@ This project uses red-green-refactor TDD. The correctness oracle for all convers
 
 ## Open Issues (from docs/review.md)
 
-- **P0** No project-specific exception type — unsupported ops surface raw PennyLane/NumPy errors.
 - **P1** Missing wire-semantic tests: named wires, non-contiguous integers, reversed multi-qubit order.
 - **P2** `scripts/scan_unsupported_ops.py` uses `qml.operation.WiresEnum` which does not exist in PennyLane ≥0.44.
 - **P2** No changelog or compatibility table; CI matrix covers 3.11/3.12 only.
