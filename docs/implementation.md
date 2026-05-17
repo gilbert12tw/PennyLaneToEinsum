@@ -42,14 +42,10 @@ integer positions before assigning indices.
 
 ## Contraction
 
-The converter can contract with:
-
-- `numpy.einsum` by default
-- `opt_einsum` when installed, when `optimize` is provided, or when a large
-  expression needs Unicode index labels beyond NumPy's usual ASCII range
-
-For large circuits, install the development extra or install `opt_einsum`
-explicitly.
+All contractions use `opt_einsum` (a runtime dependency). `opt_einsum` handles
+arbitrarily large expressions including those with more than 52 unique index
+labels that would require Unicode characters. Pass an `optimize` string to
+`contract_einsum` to control the path-finding strategy (default: `"auto"`).
 
 ## Supported Scope
 
@@ -67,7 +63,5 @@ explicitly.
 - Unsupported operations are not automatically decomposed.
 - Gate parameters are materialized into NumPy arrays, so PennyLane autodiff
   through the circuit is not preserved.
-- `build_batch_einsum` is experimental and currently incomplete because batch
-  dimensions are not represented in the generated einsum expression.
-- Error messages for unsupported operations are currently raw PennyLane/NumPy
-  exceptions in several cases.
+- Unsupported operations raise `UnsupportedOperationError` with the operation
+  name, wires, and original failure reason.

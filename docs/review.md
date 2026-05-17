@@ -8,16 +8,16 @@ Review date: 2026-05-15
 dense matrix 的 qubit operations 轉成 einsum tensor network，並重建 final
 statevector。核心方法務實、容易檢查，也很適合你的目前目標。
 
-但如果要開放給社群使用，現在還不應該宣稱是一般性的 PennyLane circuit converter。
-主要 blocker 是 batch API 尚未完成、large expression 對 `opt_einsum` 的 dependency
-不清楚、unsupported operations 的錯誤訊息不夠好，以及 wire/order 等常見情境測試不足。
+目前 P0 問題均已解決（batch API 移除、opt_einsum 升為 runtime dep、
+UnsupportedOperationError 已加入）。剩餘主要工作為 wire semantics 測試補齊與
+PennyLane 相容性宣告。
 
 ## 目前技術棧
 
 - Python package，透過 setuptools 建置。
 - PennyLane：建立 circuit 與 tape。
 - NumPy：dense tensor materialization 與基本 contraction。
-- opt_einsum：可選，用於 optimized contraction 或大型 einsum expression。
+- opt_einsum：runtime dependency，用於所有 contraction（支援 Unicode index label）。
 - pytest：目前測試框架。
 - uv：目前可用於重現 dev/test 環境。
 - PyTorch optional helper：只處理 statevector 之後的 Hermitian expectation
@@ -87,14 +87,10 @@ uv run --extra dev pytest -q
 name、wires、原始失敗原因，以及支援範圍說明。`circuit_to_einsum()` 現在會捕捉所有
 `op.matrix()` 拋出的例外並包裝成此型別。已加入測試確認 exception type 與訊息內容。
 
-### P1: 文件之前誇大且互相矛盾
+### ~~P1: 文件之前誇大且互相矛盾~~ ✅ 已解決
 
-舊 README 說支援所有 `op.matrix()` gate，舊 implementation notes 又說只支援 1/2-qubit
-gates。舊 guide 還在討論 Catalyst/MLIR 方案，但目前專案沒有走這個方向。
-
-影響：使用者與貢獻者會對專案定位產生錯誤期待。
-
-狀態：本輪已修正 README、implementation notes、guide，並刪除舊的 superpowers plan docs。
+README、implementation notes 已修正，舊的 Catalyst/MLIR plan docs 已刪除。專案定位
+已明確為 dense-matrix unitary converter，不是 full PennyLane compiler。
 
 ### P1: Wire semantics 測試不足
 
@@ -114,14 +110,10 @@ reversed multi-qubit gate wire order、output tensor axis order。
 
 建議：先明確文件化；未來可考慮提供 `decompose=True`。
 
-### P1: 不支援 circuit parameter autodiff
+### ~~P1: 不支援 circuit parameter autodiff~~ ✅ 已文件化
 
-Gate matrix 會被轉成 NumPy complex array，因此不保留 through-circuit 的 autodiff。
-
-影響：QML 使用者可能誤以為轉換後仍能對 circuit parameters 做 gradient。
-
-建議：文件中明確聲明。除非未來刻意實作 framework-native tensor path，否則不要把它包裝成
-autodiff-preserving transform。
+README 已明確聲明 converter 不保留 through-circuit autodiff，`expval_hermitian_torch`
+的限制也已說明（只對 observable tensor 微分，不對 circuit parameters）。
 
 ### P2: `scan_unsupported_ops.py` 在 PennyLane 0.44.1 會壞
 
@@ -152,19 +144,19 @@ PennyLane version range。
 
 ### P1: 強化核心 conversion correctness
 
-- 補 named wires 測試。
-- 補 non-contiguous integer wires 測試。
-- 補 reversed multi-qubit gate wire order 測試。
-- 補 randomized circuit vs `qml.state()` 測試。
-- 補 custom `initial_state` 測試。
-- 補 unsupported-operation tests，並檢查錯誤訊息。
+- ~~補 named wires 測試。~~ ✅
+- ~~補 non-contiguous integer wires 測試。~~ ✅
+- ~~補 reversed multi-qubit gate wire order 測試。~~ ✅
+- ~~補 randomized circuit vs `qml.state()` 測試。~~ ✅
+- ~~補 custom `initial_state` 測試。~~ ✅
+- ~~補 unsupported-operation tests，並檢查錯誤訊息。~~ ✅
 
 ### P1: 釐清 PennyLane 相容性
 
 - 定義支援的 PennyLane version range。
 - 測 minimum supported version 與 latest stable version。
 - 決定是否支援 decomposition of templates/custom operations。
-- 文件中明確聲明 measurements、state preparation、channels 目前不在 MVP 範圍。
+- ~~文件中明確聲明 measurements、state preparation、channels 目前不在 MVP 範圍。~~ ✅
 
 ### P2: 改善開發與發布流程
 

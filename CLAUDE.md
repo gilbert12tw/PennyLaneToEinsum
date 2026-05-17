@@ -70,7 +70,7 @@ init_str, gate0_str, gate1_str, ... -> final_str
 
 ### Wire handling
 
-Integer wires map to themselves. Named (non-integer) wires are remapped to contiguous integers via `tape.wires` order before index allocation. Non-contiguous or reversed wire ordering is a known gap in test coverage.
+Integer wires map to themselves. Named (non-integer) wires are remapped to contiguous integers via `tape.wires` order before index allocation. All wire-ordering cases (named, non-contiguous, reversed) are covered in `tests/test_wire_semantics.py`.
 
 ## TDD Approach
 
@@ -78,6 +78,5 @@ This project uses red-green-refactor TDD. The correctness oracle for all convers
 
 ## Open Issues (from docs/review.md)
 
-- **P1** Missing wire-semantic tests: named wires, non-contiguous integers, reversed multi-qubit order.
 - **P2** `scripts/scan_unsupported_ops.py` uses `qml.operation.WiresEnum` which does not exist in PennyLane ≥0.44.
 - **P2** No changelog or compatibility table; CI matrix covers 3.11/3.12 only.
