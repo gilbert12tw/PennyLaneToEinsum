@@ -92,8 +92,8 @@ uv run --extra dev pytest -q
 See `docs/implementation.md` for a walkthrough of the indexing strategy,
 tensor layout, and current limitations.
 
-See `docs/benchmarks.md` for the larger-circuit PennyLane conversion benchmark
-and generated matplotlib plot.
+See `docs/benchmarks.md` for the larger-circuit conversion benchmark, batch
+conversion benchmark, PennyLane comparison, and generated matplotlib plots.
 
 ## Example
 
