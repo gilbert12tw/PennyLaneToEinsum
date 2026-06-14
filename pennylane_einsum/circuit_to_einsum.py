@@ -24,13 +24,26 @@ def _build_tape(
 def _matrix_to_tensor(matrix: np.ndarray, n_wires: int) -> np.ndarray:
     matrix = np.asarray(matrix, dtype=complex)
     dim = 2**n_wires
-    if matrix.shape != (dim, dim):
+    if matrix.shape == (dim, dim):
+        reshaped = matrix.reshape([2] * (2 * n_wires))
+        out_axes = list(range(n_wires))
+        in_axes = list(range(n_wires, 2 * n_wires))
+        transpose_axes = in_axes + out_axes
+        return np.transpose(reshaped, axes=transpose_axes)
+
+    if matrix.ndim == 3 and matrix.shape[1:] == (dim, dim):
+        reshaped = matrix.reshape([matrix.shape[0]] + [2] * (2 * n_wires))
+        out_axes = list(range(1, n_wires + 1))
+        in_axes = list(range(n_wires + 1, 2 * n_wires + 1))
+        transpose_axes = [0] + in_axes + out_axes
+        return np.transpose(reshaped, axes=transpose_axes)
+
+    if matrix.ndim == 3:
+        raise ValueError(
+            f"Unexpected batched matrix shape {matrix.shape} for {n_wires} wires"
+        )
+    else:
         raise ValueError(f"Unexpected matrix shape {matrix.shape} for {n_wires} wires")
-    reshaped = matrix.reshape([2] * (2 * n_wires))
-    out_axes = list(range(n_wires))
-    in_axes = list(range(n_wires, 2 * n_wires))
-    transpose_axes = in_axes + out_axes
-    return np.transpose(reshaped, axes=transpose_axes)
 
 
 def contract_einsum(
@@ -96,6 +109,8 @@ def expval_hermitian_torch(
 class CircuitToEinsum:
     n_qubits: int
     index_manager: IndexManager
+    batch_size: Optional[int] = None
+    batch_index: Optional[str] = None
 
     @classmethod
     def for_qubits(cls, n_qubits: int) -> "CircuitToEinsum":
@@ -106,6 +121,16 @@ class CircuitToEinsum:
         if all(isinstance(w, int) for w in wire_list):
             return {int(w): int(w) for w in wire_list}
         return {wire: idx for idx, wire in enumerate(wire_list)}
+
+    def _record_batch_size(self, batch_size: int) -> None:
+        if self.batch_size is None:
+            self.batch_size = batch_size
+            self.batch_index = self.index_manager.fresh_index()
+        elif self.batch_size != batch_size:
+            raise ValueError(
+                "All batched gate matrices must share the same leading batch "
+                f"size; got {batch_size} after {self.batch_size}"
+            )
 
     def _apply_gate(
         self, gate_matrix: np.ndarray, wires: List[int]
@@ -121,9 +146,16 @@ class CircuitToEinsum:
             self.index_manager.set(w, out_idx)
 
         tensor = _matrix_to_tensor(gate_matrix, n_wires)
+        batch_prefix = ""
+        if tensor.ndim == 2 * n_wires + 1:
+            self._record_batch_size(tensor.shape[0])
+            if self.batch_index is None:
+                raise RuntimeError("batch_index was not initialized")
+            batch_prefix = self.batch_index
+
         in_str = "".join(in_indices)
         out_str = "".join(out_indices)
-        einsum_str = f"{in_str},{in_str}{out_str}"
+        einsum_str = f"{in_str},{batch_prefix}{in_str}{out_str}"
         return einsum_str, tensor
 
     def circuit_to_einsum(
@@ -132,6 +164,8 @@ class CircuitToEinsum:
         params: Optional[Iterable[Any]] = None,
     ) -> Dict[str, Any]:
         self.index_manager.counter = 0
+        self.batch_size = None
+        self.batch_index = None
         init_indices = self.index_manager.init_qubits()
 
         tape = _build_tape(circuit_func, params)
@@ -175,6 +209,8 @@ class CircuitToEinsum:
             "initial_indices": init_indices,
             "operations": operations,
             "final_indices": self.index_manager.snapshot(),
+            "batch_size": self.batch_size,
+            "batch_index": self.batch_index,
         }
 
     def generate_full_einsum(
@@ -198,5 +234,7 @@ class CircuitToEinsum:
         init_idx_str = "".join(einsum_data["initial_indices"].values())
         gate_strs = [op["einsum"].split(",")[1] for op in einsum_data["operations"]]
         final_idx_str = "".join(einsum_data["final_indices"].values())
+        if einsum_data.get("batch_index") is not None:
+            final_idx_str = f"{einsum_data['batch_index']}{final_idx_str}"
         full_einsum = f"{init_idx_str},{','.join(gate_strs)}->{final_idx_str}"
         return full_einsum, tensors + [op["tensor"] for op in einsum_data["operations"]]

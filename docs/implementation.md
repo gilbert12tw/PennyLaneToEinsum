@@ -15,7 +15,8 @@ to be a full PennyLane compiler.
 1. `CircuitToEinsum.circuit_to_einsum` builds a tape and collects operations.
 2. Each operation provides a dense matrix via `op.matrix()`.
 3. The matrix is converted to a NumPy complex array and reshaped into a rank-2n
-   tensor with input/output indices.
+   tensor with input/output indices. Batched matrices keep one leading batch
+   axis.
 4. An `IndexManager` allocates fresh index labels for each qubit as gates are applied.
 5. `generate_full_einsum` assembles the full einsum expression and tensors list.
 
@@ -40,6 +41,22 @@ The wire order used for the gate tensor is the operation's own wire order. For
 non-integer PennyLane wires, the converter maps `tape.wires` to contiguous
 integer positions before assigning indices.
 
+## Batched Tensor Layout
+
+PennyLane parameter broadcasting produces gate matrices with shape
+`(B, 2**n, 2**n)`. The converter treats `B` as one shared leading batch axis:
+
+- The matrix is reshaped to `(B, [2] * n, [2] * n)`.
+- Axes are transposed to `[batch, in..., out...]`.
+- A shared batch index is prepended to the gate tensor term.
+- The same batch index is prepended to the final state output.
+
+For example, a single-qubit batched gate changes from `ef` to `ief`, and a final
+two-qubit output changes from `df` to `idf`.
+
+All batched gates in one circuit must have the same leading batch size. Fixed
+gates remain unbatched and broadcast naturally in the einsum expression.
+
 ## Contraction
 
 All contractions use `opt_einsum` (a runtime dependency). `opt_einsum` handles
@@ -51,7 +68,10 @@ labels that would require Unicode characters. Pass an `optimize` string to
 
 - Fixed-width qubit operations whose `op.matrix()` returns a dense
   `(2**n, 2**n)` matrix.
+- Parameter-broadcasted operations whose `op.matrix()` returns a dense
+  `(B, 2**n, 2**n)` matrix.
 - Common one-, two-, and multi-qubit unitary gates, including Toffoli.
+- Batched `RX`, `RY`, `RZ`, `Rot`, and `CRot` are covered by tests.
 - Integer wires and basic named-wire circuits, subject to the output-order caveat
   above.
 
@@ -63,5 +83,8 @@ labels that would require Unicode characters. Pass an `optimize` string to
 - Unsupported operations are not automatically decomposed.
 - Gate parameters are materialized into NumPy arrays, so PennyLane autodiff
   through the circuit is not preserved.
+- Only one shared leading batch axis is supported.
+- Batched initial states are not supported; one initial state is reused for all
+  batch elements.
 - Unsupported operations raise `UnsupportedOperationError` with the operation
   name, wires, and original failure reason.
