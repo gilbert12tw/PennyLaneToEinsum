@@ -61,6 +61,107 @@ def contract_einsum(
     return oe.contract(einsum_expr, *tensors, optimize=optimize or "auto")
 
 
+# ── Observable handling ───────────────────────────────────────────────────────
+
+_PAULI_MATRICES = {
+    "I": np.array([[1, 0], [0, 1]], dtype=complex),
+    "X": np.array([[0, 1], [1, 0]], dtype=complex),
+    "Y": np.array([[0, -1j], [1j, 0]], dtype=complex),
+    "Z": np.array([[1, 0], [0, -1]], dtype=complex),
+}
+
+
+def _is_torch_tensor(obj: Any) -> bool:
+    return type(obj).__module__.startswith("torch") and type(obj).__name__ == "Tensor"
+
+
+def _conj(tensor: Any) -> Any:
+    return tensor.conj() if _is_torch_tensor(tensor) else np.conjugate(tensor)
+
+
+def _match_backend(operands: List[Any], obs: Dict[int, Any]) -> List[Any]:
+    """Promote all operands to torch when any observable is a torch tensor.
+
+    Keeps ``opt_einsum`` on a single backend (mixing numpy and torch fails) and
+    preserves the autograd graph on the torch observable. Gate/state tensors become
+    constant torch leaves on the observable's dtype/device.
+    """
+    torch_refs = [m for m in obs.values() if _is_torch_tensor(m)]
+    if not torch_refs:
+        return operands
+
+    import torch
+
+    ref = torch_refs[0]
+    converted: List[Any] = []
+    for op in operands:
+        if _is_torch_tensor(op):
+            converted.append(op.to(dtype=ref.dtype, device=ref.device))
+        else:
+            converted.append(
+                torch.as_tensor(np.asarray(op), dtype=ref.dtype, device=ref.device)
+            )
+    return converted
+
+
+def normalize_observable(
+    observable: Any,
+    n_qubits: int,
+    wire_order: Optional[Iterable[int]] = None,
+) -> Dict[int, Any]:
+    """Normalize an observable spec into ``{wire: 2x2 matrix}`` for measured wires.
+
+    Accepted forms:
+      - Pauli string ``"IZZ"`` — one char per wire in ``wire_order`` (default
+        ``range(n_qubits)``). ``'I'`` entries are dropped.
+      - dict of Pauli chars ``{0: 'Z', 2: 'X'}`` — ``'I'`` entries dropped.
+      - dict of 2x2 matrices ``{wire: H}`` — single-qubit Hermitians, passed through
+        (numpy arrays or torch tensors).
+      - tuple ``(matrix, wires)`` — a single 2x2 matrix applied to each wire.
+
+    Identity (unmeasured) wires are omitted from the result; the caller traces them
+    out by collapsing bra/ket frontier indices.
+    """
+    wires = list(range(n_qubits)) if wire_order is None else list(wire_order)
+
+    if isinstance(observable, str):
+        if len(observable) != n_qubits:
+            raise ValueError(
+                f"Pauli string '{observable}' has length {len(observable)}, "
+                f"expected {n_qubits}"
+            )
+        observable = dict(zip(wires, observable))
+
+    if isinstance(observable, tuple):
+        matrix, op_wires = observable
+        op_wires = [op_wires] if isinstance(op_wires, int) else list(op_wires)
+        observable = {w: matrix for w in op_wires}
+
+    if not isinstance(observable, dict):
+        raise TypeError(
+            "observable must be a Pauli string, a dict, or a (matrix, wires) tuple; "
+            f"got {type(observable).__name__}"
+        )
+
+    result: Dict[int, Any] = {}
+    for wire, spec in observable.items():
+        if isinstance(spec, str):
+            if spec not in _PAULI_MATRICES:
+                raise ValueError(f"Unknown Pauli character '{spec}' on wire {wire}")
+            if spec == "I":
+                continue
+            result[wire] = _PAULI_MATRICES[spec]
+        else:
+            if not _is_torch_tensor(spec):
+                spec = np.asarray(spec, dtype=complex)
+            if tuple(spec.shape) != (2, 2):
+                raise ValueError(
+                    f"Observable on wire {wire} must be 2x2; got shape {tuple(spec.shape)}"
+                )
+            result[wire] = spec
+    return result
+
+
 
 def expval_hermitian_torch(
     statevec: np.ndarray,
@@ -97,12 +198,11 @@ def expval_hermitian_torch(
             "torch is required for expval_hermitian_torch; install it with: pip install torch"
         ) from exc
 
-    sv = torch.as_tensor(statevec, dtype=H.dtype).to(H.device)
-    I2 = torch.eye(2, dtype=H.dtype, device=H.device)
-    full_op = torch.ones(1, 1, dtype=H.dtype, device=H.device)
-    for q in range(n_qubits):
-        full_op = torch.kron(full_op, H if q == qubit else I2)
-    return (sv.conj() @ full_op @ sv).real
+    sv = torch.as_tensor(statevec, dtype=H.dtype, device=H.device)
+    state = sv.reshape([2] * n_qubits)
+    state = torch.movedim(state, qubit, 0).reshape(2, -1)
+    rho = state @ state.conj().T
+    return torch.trace(rho @ H).real
 
 
 @dataclass
@@ -213,11 +313,17 @@ class CircuitToEinsum:
             "batch_index": self.batch_index,
         }
 
-    def generate_full_einsum(
+    def _ket_operands(
         self,
         einsum_data: Dict[str, Any],
         initial_state: Optional[np.ndarray] = None,
-    ) -> Tuple[str, List[np.ndarray]]:
+    ) -> List[Tuple[str, np.ndarray]]:
+        """Build the forward (ket) tensor network ``U|0…0⟩`` as ``[(index_str, tensor)]``.
+
+        The first entry is the initial state; the rest are the gate tensors in
+        application order. The free (frontier) index of qubit ``q`` after the last
+        gate is ``einsum_data["final_indices"][q]``.
+        """
         n_qubits = self.n_qubits
 
         if initial_state is None:
@@ -230,11 +336,106 @@ class CircuitToEinsum:
                     "initial_state must be a flat statevector of length 2**n_qubits"
                 )
 
-        tensors: List[np.ndarray] = [state.reshape([2] * n_qubits)]
         init_idx_str = "".join(einsum_data["initial_indices"].values())
-        gate_strs = [op["einsum"].split(",")[1] for op in einsum_data["operations"]]
+        terms: List[Tuple[str, np.ndarray]] = [(init_idx_str, state.reshape([2] * n_qubits))]
+        for op in einsum_data["operations"]:
+            gate_str = op["einsum"].split(",")[1]
+            terms.append((gate_str, op["tensor"]))
+        return terms
+
+    def generate_full_einsum(
+        self,
+        einsum_data: Dict[str, Any],
+        initial_state: Optional[np.ndarray] = None,
+    ) -> Tuple[str, List[np.ndarray]]:
+        terms = self._ket_operands(einsum_data, initial_state)
+        idx_strs = [idx for idx, _ in terms]
+        tensors = [tensor for _, tensor in terms]
         final_idx_str = "".join(einsum_data["final_indices"].values())
         if einsum_data.get("batch_index") is not None:
             final_idx_str = f"{einsum_data['batch_index']}{final_idx_str}"
-        full_einsum = f"{init_idx_str},{','.join(gate_strs)}->{final_idx_str}"
-        return full_einsum, tensors + [op["tensor"] for op in einsum_data["operations"]]
+        full_einsum = f"{','.join(idx_strs)}->{final_idx_str}"
+        return full_einsum, tensors
+
+    def generate_expectation_einsum(
+        self,
+        einsum_data: Dict[str, Any],
+        observable: Any,
+        initial_state: Optional[np.ndarray] = None,
+    ) -> Tuple[str, List[Any]]:
+        """Build ``⟨ψ|O|ψ⟩`` as a single einsum that contracts to a scalar.
+
+        Mirrors cuQuantum's ``expectation``: the ket ``U|0⟩``, the observable ``O``,
+        and the bra ``⟨0|U†`` (the conjugate mirror of the ket with relabeled
+        indices) are assembled into one network with no free output indices (or just
+        the batch index when the circuit is batched).
+
+        ``observable`` accepts any form understood by :func:`normalize_observable`.
+        If the observable contains torch tensors, all operands are converted to torch
+        so ``opt_einsum`` can backpropagate through it.
+        """
+        ket_terms = self._ket_operands(einsum_data, initial_state)
+        batch_index = einsum_data.get("batch_index")
+        final_indices = einsum_data["final_indices"]
+
+        obs = normalize_observable(observable, self.n_qubits)
+        measured = set(obs.keys())
+
+        ket_chars = set()
+        for idx_str, _ in ket_terms:
+            ket_chars.update(idx_str)
+        if batch_index is not None:
+            ket_chars.discard(batch_index)
+
+        # Fresh bra label per ket char; identity wires collapse onto the ket frontier.
+        relabel_map = {c: self.index_manager.fresh_index() for c in sorted(ket_chars)}
+        for q, f_q in final_indices.items():
+            if q not in measured:
+                relabel_map[f_q] = f_q
+
+        def relabel(s: str) -> str:
+            return "".join(c if c == batch_index else relabel_map[c] for c in s)
+
+        idx_strs: List[str] = []
+        operands: List[Any] = []
+
+        for idx_str, tensor in ket_terms:  # ket: U|0⟩
+            idx_strs.append(idx_str)
+            operands.append(tensor)
+
+        for idx_str, tensor in ket_terms:  # bra: conj(U|0⟩) = ⟨0|U†
+            idx_strs.append(relabel(idx_str))
+            operands.append(_conj(tensor))
+
+        for q, matrix in obs.items():  # observable: O_{bra, ket}
+            f_q = final_indices[q]
+            idx_strs.append(f"{relabel_map[f_q]}{f_q}")
+            operands.append(matrix)
+
+        operands = _match_backend(operands, obs)
+        out_str = batch_index if batch_index is not None else ""
+        expr = f"{','.join(idx_strs)}->{out_str}"
+        return expr, operands
+
+
+def expectation_value(
+    circuit_func: Callable[..., Any],
+    observable: Any,
+    n_qubits: int,
+    params: Optional[Iterable[Any]] = None,
+    initial_state: Optional[np.ndarray] = None,
+    optimize: Optional[str] = None,
+    return_real: bool = True,
+) -> Any:
+    """Compute ``⟨ψ|O|ψ⟩`` for ``|ψ⟩ = U|0…0⟩`` via a single tensor-network contraction.
+
+    Convenience wrapper around :meth:`CircuitToEinsum.generate_expectation_einsum`.
+    Returns a scalar (a length-``batch`` vector for batched circuits). For a Hermitian
+    observable the value is real; ``return_real`` takes ``.real`` to match
+    ``qml.expval`` semantics while preserving torch gradients.
+    """
+    converter = CircuitToEinsum.for_qubits(n_qubits)
+    data = converter.circuit_to_einsum(circuit_func, params=params)
+    expr, tensors = converter.generate_expectation_einsum(data, observable, initial_state)
+    value = contract_einsum(expr, tensors, optimize=optimize)
+    return value.real if return_real else value

@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import pennylane as qml
 
-from pennylane_einsum import CircuitToEinsum, contract_einsum
+from pennylane_einsum import CircuitToEinsum, contract_einsum, expectation_value
 
 
 def simple_circuit() -> None:
@@ -196,11 +196,38 @@ def demo_qk_learnob_pattern() -> None:
     compare_with_pennylane(circuit, n_qubits=2, state=state)
 
 
+def demo_expectation_value() -> None:
+    section("5. Expectation value: <psi|O|psi> = <0|U+ O U|0> as one einsum")
+
+    def bell() -> None:
+        qml.Hadamard(wires=0)
+        qml.CNOT(wires=[0, 1])
+
+    converter = CircuitToEinsum.for_qubits(2)
+    data = converter.circuit_to_einsum(bell)
+    expr, tensors = converter.generate_expectation_einsum(data, "ZZ")
+    print("Expectation einsum:", expr, "(empty RHS -> scalar)")
+    print("Operand count:", len(tensors), "(ket + bra + observable terms)")
+
+    ev = expectation_value(bell, "ZZ", n_qubits=2)
+    print("<ZZ> (einsum):   ", ev)
+
+    dev = qml.device("default.qubit", wires=2)
+
+    @qml.qnode(dev)
+    def qnode():
+        bell()
+        return qml.expval(qml.PauliZ(0) @ qml.PauliZ(1))
+
+    print("<ZZ> (PennyLane):", float(qnode()))
+
+
 def run_example() -> None:
     demo_basic_conversion()
-    demo_named_wires()
-    demo_custom_initial_state()
-    demo_qk_learnob_pattern()
+    # demo_named_wires()
+    # demo_custom_initial_state()
+    # demo_qk_learnob_pattern()
+    # demo_expectation_value()
 
 
 if __name__ == "__main__":
