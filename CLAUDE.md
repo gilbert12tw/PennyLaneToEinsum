@@ -66,11 +66,22 @@ parameters). The observable bridges the ket/bra frontiers — `O_{bra,ket}` per 
 wire; identity wires collapse bra→ket frontier (traced out). The contraction has no free
 output indices (just the batch index when batched), so the result is a scalar / batch vector.
 
-`observable` is normalized by `normalize_observable` and accepts: a Pauli string `"IZZ"`,
-a dict `{wire: 'Z'}` or `{wire: 2×2 matrix}`, or a `(matrix, wires)` tuple. If any matrix
-is a torch tensor, all operands are promoted to torch so `opt_einsum` backprops through the
-observable (gate tensors stay constant — the project does not autodiff through gate params).
-`expectation_value(circuit_func, observable, n_qubits, params=...)` is the one-call wrapper.
+`observable` is normalized by `normalize_observable` into `{wires_tuple: 2**k×2**k matrix}`
+and accepts: a Pauli string `"IZZ"`, a dict `{wire: 'Z'}` / `{wire: 2×2 matrix}` /
+`{(0,1): 4×4 matrix}`, a `(matrix, wires)` tuple, or a single PennyLane observable
+(`qml.PauliZ(0)`, `qml.PauliX(0) @ qml.PauliZ(1)`, `qml.Hermitian(H, wires=...)`). Weighted
+sums (`qml.Hamiltonian` / `LinearCombination` / `Sum`) are handled in `expectation_value`
+via `_observable_terms`, evaluated by linearity `⟨H⟩ = Σ c_i ⟨O_i⟩` (one contraction per
+term). If any matrix is a torch tensor, all operands are promoted to torch (`_match_backend`)
+so `opt_einsum` backprops through the observable (gate tensors stay constant — the project
+does not autodiff through gate params).
+
+`generate_expectation_einsum(..., lightcone=True)` drops gates outside the observable's
+reverse causal cone (`_causal_ops`) and re-threads fresh indices over the kept gates
+(`_thread_ket`, needed because dropping gates breaks the pre-allocated index chain). The
+value is unchanged; the path becomes observable-dependent. `expectation_value(circuit_func,
+observable, n_qubits, params=..., lightcone=...)` is the one-call wrapper. PennyLane
+observable wires are assumed to be the integer wires used by the circuit.
 
 ### Einsum index convention
 

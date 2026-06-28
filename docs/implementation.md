@@ -64,6 +64,44 @@ arbitrarily large expressions including those with more than 52 unique index
 labels that would require Unicode characters. Pass an `optimize` string to
 `contract_einsum` to control the path-finding strategy (default: `"auto"`).
 
+## Expectation Values
+
+`generate_expectation_einsum` builds `⟨ψ|O|ψ⟩ = ⟨0|U† O U|0⟩` as one einsum with no
+free output indices (a scalar; just the batch index when batched). The pieces:
+
+- **Ket** `U|0⟩`: the same operands `generate_full_einsum` produces. The frontier
+  index of qubit `q` is `final_indices[q]`.
+- **Bra** `⟨0|U†`: the conjugate mirror — every ket tensor is `conj`-ed and its
+  indices relabeled to fresh labels (`relabel_map`). The batch index is *not*
+  relabeled, so `U` and `U†` share the same parameters per batch element.
+- **Observable** `O`: per measured wire-group, a `2**k × 2**k` matrix reshaped to
+  `([2]*k bra) + ([2]*k ket)` and indexed `bra_legs + ket_legs`. Unmeasured wires set
+  `relabel_map[f_q] = f_q`, collapsing bra onto ket (an identity / partial trace), so
+  no tensor is emitted there.
+
+`normalize_observable` reduces any single (non-summed) observable — Pauli string,
+dict, `(matrix, wires)` tuple, or a PennyLane operator — to `{wires_tuple: matrix}`.
+Tensor products are split into disjoint single/multi-wire factors so the observable
+tensors stay small. Weighted sums (`qml.Hamiltonian`) are expanded by
+`_observable_terms` and evaluated in `expectation_value` as `Σ_i c_i ⟨O_i⟩`.
+
+### Lightcone cancellation
+
+With `lightcone=True`, `_causal_ops` walks the gate list backwards and keeps only
+gates that can causally reach a measured wire (a kept gate pulls all its wires into
+the cone). Gates outside the cone would form `g g†` identities in the sandwich, so
+dropping them leaves the value unchanged. Because dropping gates breaks the
+pre-allocated index chain, `_thread_ket` re-derives fresh indices over the kept
+gates. The contraction path becomes observable-dependent and is not reusable across
+different observables.
+
+### Backends
+
+If any observable matrix is a `torch.Tensor`, `_match_backend` promotes every operand
+(state, gates, observable) to torch on that tensor's dtype/device, keeping `opt_einsum`
+on a single backend and preserving the autograd graph on the observable. Gate tensors
+become constant torch leaves — gradients reach the observable but not gate parameters.
+
 ## Supported Scope
 
 - Fixed-width qubit operations whose `op.matrix()` returns a dense
@@ -78,7 +116,10 @@ labels that would require Unicode characters. Pass an `optimize` string to
 ## Limitations
 
 - State preparation operations are not supported.
-- Measurements, observables, and mid-circuit measurement flows are not converted.
+- Mid-circuit measurement flows inside the circuit body are not converted.
+  Observables for expectation values are supported separately via
+  `expectation_value` (see above), but single multi-wire dense observables are not
+  factored and PennyLane observable wires must match the circuit's integer wires.
 - Channels/noisy operations are not supported.
 - Unsupported operations are not automatically decomposed.
 - Gate parameters are materialized into NumPy arrays, so PennyLane autodiff

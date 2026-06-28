@@ -104,24 +104,100 @@ def _match_backend(operands: List[Any], obs: Dict[int, Any]) -> List[Any]:
     return converted
 
 
+def _is_pl_operator(obj: Any) -> bool:
+    return isinstance(obj, qml.operation.Operator)
+
+
+def _normalized_term(matrix: Any, wires: Tuple[int, ...]) -> Tuple[Tuple[int, ...], Any]:
+    """Validate a single observable factor: a 2**k x 2**k matrix on ``wires``."""
+    k = len(wires)
+    if not _is_torch_tensor(matrix):
+        matrix = np.asarray(matrix, dtype=complex)
+    if tuple(matrix.shape) != (2**k, 2**k):
+        raise ValueError(
+            f"Observable on wires {wires} must be {2**k}x{2**k}; "
+            f"got shape {tuple(matrix.shape)}"
+        )
+    return wires, matrix
+
+
+def _pl_operator_to_dict(op: Any, n_qubits: int) -> Dict[Tuple[int, ...], Any]:
+    """Factor a single (non-summed) PennyLane operator into ``{wires_tuple: matrix}``.
+
+    Tensor products / ``Prod`` are split into their disjoint-wire factors so the
+    observable tensors stay small; identity factors are dropped; anything else
+    becomes one dense block over its own wires.
+    """
+    name = getattr(op, "name", "")
+    if name in ("Identity", "I"):
+        return {}
+
+    operands = getattr(op, "operands", None)
+    if operands is None and hasattr(op, "obs"):  # legacy qml.operation.Tensor
+        operands = op.obs
+    if operands is not None and name in ("Prod", "Tensor"):
+        result: Dict[Tuple[int, ...], Any] = {}
+        for sub in operands:
+            result.update(_pl_operator_to_dict(sub, n_qubits))
+        return result
+
+    wires = tuple(int(w) for w in op.wires)
+    matrix = qml.matrix(op, wire_order=op.wires)
+    key, value = _normalized_term(matrix, wires)
+    return {key: value}
+
+
+def _observable_terms(
+    observable: Any, n_qubits: int
+) -> List[Tuple[complex, Dict[Tuple[int, ...], Any]]]:
+    """Expand any observable into a weighted sum ``[(coeff, single_operator_dict)]``.
+
+    Non-summed inputs yield a single ``(1.0, dict)`` entry; a PennyLane
+    ``Hamiltonian`` / ``LinearCombination`` / ``Sum`` yields one entry per term so
+    the caller can compute ``<H> = sum_i c_i <O_i>`` by linearity.
+    """
+    if _is_pl_operator(observable):
+        try:
+            coeffs, ops = observable.terms()
+        except Exception:
+            coeffs, ops = [1.0], [observable]
+        return [
+            (complex(c), _pl_operator_to_dict(op, n_qubits))
+            for c, op in zip(coeffs, ops)
+        ]
+    return [(1.0 + 0j, normalize_observable(observable, n_qubits))]
+
+
 def normalize_observable(
     observable: Any,
     n_qubits: int,
     wire_order: Optional[Iterable[int]] = None,
-) -> Dict[int, Any]:
-    """Normalize an observable spec into ``{wire: 2x2 matrix}`` for measured wires.
+) -> Dict[Tuple[int, ...], Any]:
+    """Normalize a single (non-summed) observable into ``{wires_tuple: matrix}``.
 
     Accepted forms:
       - Pauli string ``"IZZ"`` — one char per wire in ``wire_order`` (default
         ``range(n_qubits)``). ``'I'`` entries are dropped.
-      - dict of Pauli chars ``{0: 'Z', 2: 'X'}`` — ``'I'`` entries dropped.
-      - dict of 2x2 matrices ``{wire: H}`` — single-qubit Hermitians, passed through
-        (numpy arrays or torch tensors).
-      - tuple ``(matrix, wires)`` — a single 2x2 matrix applied to each wire.
+      - dict ``{wire: 'Z'}`` (Pauli chars) or ``{wire: 2x2 matrix}`` (single-qubit
+        Hermitian); a tuple key ``{(0, 1): 4x4 matrix}`` gives a multi-qubit factor.
+      - tuple ``(matrix, wires)`` — a 2**k x 2**k matrix on ``k`` wires.
+      - a single PennyLane observable (``qml.PauliZ(0)``, ``qml.PauliX(0) @
+        qml.PauliZ(1)``, ``qml.Hermitian(H, wires=...)``). For a weighted sum
+        (``qml.Hamiltonian``) use :func:`expectation_value`, which sums the terms.
 
-    Identity (unmeasured) wires are omitted from the result; the caller traces them
-    out by collapsing bra/ket frontier indices.
+    Keys are wire tuples; values are ``2**k x 2**k`` matrices (numpy or torch).
+    Identity / unmeasured wires are omitted — the caller traces them out by
+    collapsing bra/ket frontier indices.
     """
+    if _is_pl_operator(observable):
+        terms = _observable_terms(observable, n_qubits)
+        if len(terms) != 1 or abs(terms[0][0] - 1.0) > 1e-12:
+            raise ValueError(
+                "Weighted / multi-term observable (e.g. qml.Hamiltonian); "
+                "use expectation_value(), which sums the terms by linearity."
+            )
+        return terms[0][1]
+
     wires = list(range(n_qubits)) if wire_order is None else list(wire_order)
 
     if isinstance(observable, str):
@@ -134,33 +210,50 @@ def normalize_observable(
 
     if isinstance(observable, tuple):
         matrix, op_wires = observable
-        op_wires = [op_wires] if isinstance(op_wires, int) else list(op_wires)
-        observable = {w: matrix for w in op_wires}
+        op_wires = (op_wires,) if isinstance(op_wires, int) else tuple(op_wires)
+        observable = {op_wires: matrix}
 
     if not isinstance(observable, dict):
         raise TypeError(
-            "observable must be a Pauli string, a dict, or a (matrix, wires) tuple; "
-            f"got {type(observable).__name__}"
+            "observable must be a Pauli string, a dict, a (matrix, wires) tuple, "
+            f"or a PennyLane observable; got {type(observable).__name__}"
         )
 
-    result: Dict[int, Any] = {}
-    for wire, spec in observable.items():
+    result: Dict[Tuple[int, ...], Any] = {}
+    for key, spec in observable.items():
+        key_wires = key if isinstance(key, tuple) else (key,)
         if isinstance(spec, str):
             if spec not in _PAULI_MATRICES:
-                raise ValueError(f"Unknown Pauli character '{spec}' on wire {wire}")
+                raise ValueError(f"Unknown Pauli character '{spec}' on wire {key}")
             if spec == "I":
                 continue
-            result[wire] = _PAULI_MATRICES[spec]
+            result[key_wires] = _PAULI_MATRICES[spec]
         else:
-            if not _is_torch_tensor(spec):
-                spec = np.asarray(spec, dtype=complex)
-            if tuple(spec.shape) != (2, 2):
-                raise ValueError(
-                    f"Observable on wire {wire} must be 2x2; got shape {tuple(spec.shape)}"
-                )
-            result[wire] = spec
+            k, v = _normalized_term(spec, key_wires)
+            result[k] = v
     return result
 
+
+def _causal_ops(
+    operations: List[Dict[str, Any]], measured_wires: Iterable[int]
+) -> List[Dict[str, Any]]:
+    """Reverse lightcone: keep only gates that can causally affect ``measured_wires``.
+
+    Walking the gate list backwards, a gate is kept iff it touches a wire already in
+    the cone; when kept, all its wires join the cone (an entangling gate pulls its
+    partners in). Gates never touching the cone are dropped — in the ⟨0|U† O U|0⟩
+    network they sit outside the observable's support and cancel against their
+    inverse, so removing them leaves the expectation unchanged.
+    """
+    cone = set(measured_wires)
+    kept_reversed: List[Dict[str, Any]] = []
+    for op in reversed(operations):
+        op_wires = set(op["wires"])
+        if op_wires & cone:
+            kept_reversed.append(op)
+            cone |= op_wires
+    kept_reversed.reverse()
+    return kept_reversed
 
 
 def expval_hermitian_torch(
@@ -357,11 +450,61 @@ class CircuitToEinsum:
         full_einsum = f"{','.join(idx_strs)}->{final_idx_str}"
         return full_einsum, tensors
 
+    def _thread_ket(
+        self,
+        operations: List[Dict[str, Any]],
+        initial_state: Optional[np.ndarray] = None,
+    ) -> Tuple[List[Tuple[str, np.ndarray]], Dict[int, str], Optional[str]]:
+        """Re-thread fresh einsum indices over an arbitrary subset of operations.
+
+        Unlike :meth:`_ket_operands` (which reuses the labels baked into
+        ``einsum_data``), this re-derives the qubit frontier from scratch so a
+        *filtered* gate list (lightcone) still chains correctly. Returns
+        ``(ket_terms, final_indices, batch_index)``.
+        """
+        n_qubits = self.n_qubits
+        self.index_manager.counter = 0
+        init = self.index_manager.init_qubits()
+
+        if initial_state is None:
+            state = np.zeros(2**n_qubits, dtype=complex)
+            state[0] = 1.0
+        else:
+            state = np.asarray(initial_state, dtype=complex)
+            if state.shape != (2**n_qubits,):
+                raise ValueError(
+                    "initial_state must be a flat statevector of length 2**n_qubits"
+                )
+
+        init_str = "".join(init[q] for q in range(n_qubits))
+        terms: List[Tuple[str, np.ndarray]] = [(init_str, state.reshape([2] * n_qubits))]
+        frontier = dict(init)
+        batch_index: Optional[str] = None
+
+        for op in operations:
+            wires = op["wires"]
+            tensor = op["tensor"]
+            n_wires = len(wires)
+            in_idx = [frontier[w] for w in wires]
+            out_idx = [self.index_manager.fresh_index() for _ in wires]
+            for w, o in zip(wires, out_idx):
+                frontier[w] = o
+            prefix = ""
+            if tensor.ndim == 2 * n_wires + 1:
+                if batch_index is None:
+                    batch_index = self.index_manager.fresh_index()
+                prefix = batch_index
+            terms.append((f"{prefix}{''.join(in_idx)}{''.join(out_idx)}", tensor))
+
+        final_indices = {q: frontier[q] for q in range(n_qubits)}
+        return terms, final_indices, batch_index
+
     def generate_expectation_einsum(
         self,
         einsum_data: Dict[str, Any],
         observable: Any,
         initial_state: Optional[np.ndarray] = None,
+        lightcone: bool = False,
     ) -> Tuple[str, List[Any]]:
         """Build ``⟨ψ|O|ψ⟩`` as a single einsum that contracts to a scalar.
 
@@ -370,16 +513,28 @@ class CircuitToEinsum:
         indices) are assembled into one network with no free output indices (or just
         the batch index when the circuit is batched).
 
-        ``observable`` accepts any form understood by :func:`normalize_observable`.
-        If the observable contains torch tensors, all operands are converted to torch
-        so ``opt_einsum`` can backpropagate through it.
-        """
-        ket_terms = self._ket_operands(einsum_data, initial_state)
-        batch_index = einsum_data.get("batch_index")
-        final_indices = einsum_data["final_indices"]
+        ``observable`` accepts any single (non-summed) form understood by
+        :func:`normalize_observable`, including a PennyLane observable. If it contains
+        torch tensors, all operands are converted to torch so ``opt_einsum`` can
+        backpropagate through it.
 
+        With ``lightcone=True``, gates outside the observable's reverse causal cone
+        are dropped (they would cancel against their inverse in the bra), shrinking the
+        network. The result is unchanged; the contraction path depends on the
+        observable, so it cannot be reused across different observables.
+        """
         obs = normalize_observable(observable, self.n_qubits)
-        measured = set(obs.keys())
+        measured: set = set()
+        for wires_tuple in obs:
+            measured.update(wires_tuple)
+
+        if lightcone:
+            ops = _causal_ops(einsum_data["operations"], measured)
+            ket_terms, final_indices, batch_index = self._thread_ket(ops, initial_state)
+        else:
+            ket_terms = self._ket_operands(einsum_data, initial_state)
+            final_indices = einsum_data["final_indices"]
+            batch_index = einsum_data.get("batch_index")
 
         ket_chars = set()
         for idx_str, _ in ket_terms:
@@ -407,10 +562,12 @@ class CircuitToEinsum:
             idx_strs.append(relabel(idx_str))
             operands.append(_conj(tensor))
 
-        for q, matrix in obs.items():  # observable: O_{bra, ket}
-            f_q = final_indices[q]
-            idx_strs.append(f"{relabel_map[f_q]}{f_q}")
-            operands.append(matrix)
+        for wires_tuple, matrix in obs.items():  # observable: O_{bra, ket}
+            ket_legs = [final_indices[w] for w in wires_tuple]
+            bra_legs = [relabel_map[leg] for leg in ket_legs]
+            shape = (2,) * (2 * len(wires_tuple))
+            idx_strs.append(f"{''.join(bra_legs)}{''.join(ket_legs)}")
+            operands.append(matrix.reshape(shape))
 
         operands = _match_backend(operands, obs)
         out_str = batch_index if batch_index is not None else ""
@@ -426,16 +583,36 @@ def expectation_value(
     initial_state: Optional[np.ndarray] = None,
     optimize: Optional[str] = None,
     return_real: bool = True,
+    lightcone: bool = False,
 ) -> Any:
-    """Compute ``⟨ψ|O|ψ⟩`` for ``|ψ⟩ = U|0…0⟩`` via a single tensor-network contraction.
+    """Compute ``⟨ψ|O|ψ⟩`` for ``|ψ⟩ = U|0…0⟩`` via a tensor-network contraction.
 
     Convenience wrapper around :meth:`CircuitToEinsum.generate_expectation_einsum`.
+    ``observable`` accepts any form understood by :func:`normalize_observable`, plus
+    weighted-sum PennyLane observables (``qml.Hamiltonian`` / ``LinearCombination`` /
+    ``Sum``), evaluated by linearity ``<H> = Σ_i c_i <O_i>``.
+
     Returns a scalar (a length-``batch`` vector for batched circuits). For a Hermitian
     observable the value is real; ``return_real`` takes ``.real`` to match
-    ``qml.expval`` semantics while preserving torch gradients.
+    ``qml.expval`` semantics while preserving torch gradients. With ``lightcone=True``
+    each term is contracted over only its causal gates.
     """
     converter = CircuitToEinsum.for_qubits(n_qubits)
     data = converter.circuit_to_einsum(circuit_func, params=params)
-    expr, tensors = converter.generate_expectation_einsum(data, observable, initial_state)
-    value = contract_einsum(expr, tensors, optimize=optimize)
-    return value.real if return_real else value
+
+    terms = _observable_terms(observable, n_qubits)
+
+    total: Any = None
+    for coeff, op_dict in terms:
+        if not op_dict:  # all-identity term: <I> = 1
+            contribution = coeff
+        else:
+            expr, tensors = converter.generate_expectation_einsum(
+                data, op_dict, initial_state, lightcone=lightcone
+            )
+            contribution = coeff * contract_einsum(expr, tensors, optimize=optimize)
+        total = contribution if total is None else total + contribution
+
+    if return_real and hasattr(total, "real"):
+        return total.real
+    return total

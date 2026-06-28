@@ -177,8 +177,8 @@ def test_large_circuit_expectation():
 
 def test_normalize_drops_identity():
     obs = normalize_observable("IZI", n_qubits=3)
-    assert set(obs.keys()) == {1}
-    np.testing.assert_allclose(obs[1], np.array([[1, 0], [0, -1]], dtype=complex))
+    assert set(obs.keys()) == {(1,)}
+    np.testing.assert_allclose(obs[(1,)], np.array([[1, 0], [0, -1]], dtype=complex))
 
 
 def test_normalize_rejects_bad_length():
@@ -189,6 +189,109 @@ def test_normalize_rejects_bad_length():
 def test_normalize_rejects_non_2x2():
     with pytest.raises(ValueError, match="2x2"):
         normalize_observable({0: np.eye(4)}, n_qubits=2)
+
+
+# ── PennyLane observable objects ──────────────────────────────────────────────
+
+@pytest.mark.parametrize(
+    "pl_obs",
+    [
+        qml.PauliZ(0),
+        qml.PauliX(0) @ qml.PauliZ(1),
+        qml.PauliX(0) @ qml.PauliY(1),
+    ],
+)
+def test_pennylane_observable_objects(pl_obs):
+    got = expectation_value(_circuit_2q, pl_obs, n_qubits=2)
+    want = _pl_expval(_circuit_2q, pl_obs, n_qubits=2)
+    assert np.isclose(got, want, atol=1e-7), f"{pl_obs}: {got} vs {want}"
+
+
+def test_pennylane_hermitian_single_wire():
+    H = _pauli_hermitian(0.7, 1.9)
+    obs = qml.Hermitian(H, wires=1)
+    got = expectation_value(_circuit_2q, obs, n_qubits=2)
+    want = _pl_expval(_circuit_2q, obs, n_qubits=2)
+    assert np.isclose(got, want, atol=1e-7)
+
+
+def test_pennylane_hermitian_two_wire():
+    rng = np.random.default_rng(3)
+    A = rng.standard_normal((4, 4)) + 1j * rng.standard_normal((4, 4))
+    H = A + A.conj().T  # Hermitian 4x4
+    obs = qml.Hermitian(H, wires=[0, 1])
+    got = expectation_value(_circuit_2q, obs, n_qubits=2)
+    want = _pl_expval(_circuit_2q, obs, n_qubits=2)
+    assert np.isclose(got, want, atol=1e-7)
+
+
+def test_pennylane_hamiltonian_linearity():
+    obs = qml.Hamiltonian(
+        [0.5, -1.2, 0.3],
+        [qml.PauliZ(0), qml.PauliX(0) @ qml.PauliZ(1), qml.Identity(0)],
+    )
+    got = expectation_value(_circuit_2q, obs, n_qubits=2)
+    want = _pl_expval(_circuit_2q, obs, n_qubits=2)
+    assert np.isclose(got, want, atol=1e-7)
+
+
+def test_normalize_rejects_hamiltonian():
+    obs = qml.Hamiltonian([0.5, 0.5], [qml.PauliZ(0), qml.PauliX(1)])
+    with pytest.raises(ValueError, match="expectation_value"):
+        normalize_observable(obs, n_qubits=2)
+
+
+# ── lightcone cancellation ────────────────────────────────────────────────────
+
+def test_lightcone_matches_full_and_pennylane():
+    # qubit 3 is only reached by gates on the 2-3 chain; gates on 0-1 are dropped.
+    def circuit():
+        qml.Hadamard(wires=0)
+        qml.RY(0.4, wires=1)
+        qml.CNOT(wires=[0, 1])
+        qml.Hadamard(wires=2)
+        qml.CNOT(wires=[2, 3])
+        qml.RZ(0.6, wires=3)
+
+    converter = CircuitToEinsum.for_qubits(4)
+    data = converter.circuit_to_einsum(circuit)
+
+    full_expr, full_t = converter.generate_expectation_einsum(data, {3: "Z"})
+    lc_expr, lc_t = converter.generate_expectation_einsum(data, {3: "Z"}, lightcone=True)
+
+    assert len(lc_t) < len(full_t), "lightcone should drop operands"
+    full_val = contract_einsum(full_expr, full_t).real
+    lc_val = contract_einsum(lc_expr, lc_t).real
+    want = _pl_expval(circuit, qml.PauliZ(3), n_qubits=4)
+
+    assert np.isclose(full_val, want, atol=1e-7)
+    assert np.isclose(lc_val, want, atol=1e-7)
+    assert np.isclose(lc_val, full_val, atol=1e-7)
+
+
+def test_lightcone_via_expectation_value():
+    def circuit():
+        qml.Hadamard(wires=0)
+        qml.CNOT(wires=[0, 1])
+        qml.Hadamard(wires=2)
+        qml.RX(0.5, wires=3)
+
+    got = expectation_value(circuit, {0: "Z", 1: "Z"}, n_qubits=4, lightcone=True)
+    want = _pl_expval(circuit, qml.PauliZ(0) @ qml.PauliZ(1), n_qubits=4)
+    assert np.isclose(got, want, atol=1e-7)
+
+
+def test_lightcone_batched_matches_full():
+    theta = np.linspace(0.2, 0.8, 3)
+
+    def circuit():
+        qml.RX(theta, wires=0)
+        qml.CNOT(wires=[0, 1])
+        qml.RY(theta * 0.5, wires=2)  # outside the {0,1} cone
+
+    full = expectation_value(circuit, "ZZI", n_qubits=3)
+    lc = expectation_value(circuit, "ZZI", n_qubits=3, lightcone=True)
+    np.testing.assert_allclose(full, lc, atol=1e-9)
 
 
 # ── torch autograd ────────────────────────────────────────────────────────────
