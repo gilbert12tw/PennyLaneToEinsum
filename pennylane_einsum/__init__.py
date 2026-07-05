@@ -7,6 +7,7 @@ from .circuit_to_einsum import (
 )
 from .exceptions import UnsupportedOperationError
 from .index_manager import IndexManager
+from .learnable_observable import PauliDirectionObservable
 
 __version__ = "0.1.0"
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "expectation_value",
     "normalize_observable",
     "expval_hermitian_torch",
+    "PauliDirectionObservable",
     "UnsupportedOperationError",
     "IndexManager",
     "__version__",
