@@ -99,6 +99,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv-slurm-*/
 env/
 venv/
 ENV/
@@ -146,4 +147,3 @@ htmlcov/
 # OS files
 .DS_Store
 Thumbs.db
-

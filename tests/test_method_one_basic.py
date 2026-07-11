@@ -117,3 +117,11 @@ def test_parametric_gate_detection():
     assert all(isinstance(op["op_class"], type) for op in param_ops)
 
 
+def test_default_initial_state_uses_product_tensors():
+    converter = CircuitToEinsum.for_qubits(6)
+    data = converter.circuit_to_einsum(lambda: None)
+
+    _, tensors = converter.generate_full_einsum(data)
+
+    assert [tensor.shape for tensor in tensors] == [(2,)] * 6
+

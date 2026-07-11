@@ -50,12 +50,42 @@ def contract_einsum(
     einsum_expr: str,
     tensors: List[np.ndarray],
     optimize: Optional[str] = None,
-) -> np.ndarray:
-    """Contract tensors using opt_einsum.
+    backend: str = "opt_einsum",
+) -> Any:
+    """Contract tensors using opt_einsum or NVIDIA cuQuantum.
 
     Supports arbitrarily large einsum expressions including those with >52
     unique indices that require Unicode labels.
     """
+    if backend == "cuquantum":
+        try:
+            import cupy as cp
+            from cuquantum.tensornet import contract
+        except ImportError as exc:
+            raise ImportError(
+                "The cuquantum backend requires the 'cuquantum' extra; "
+                "install it with: uv sync --extra cuquantum"
+            ) from exc
+
+        inputs, output = einsum_expr.split("->")
+        terms = inputs.split(",")
+        if len(terms) != len(tensors):
+            raise ValueError("einsum expression and tensor count do not match")
+        labels = dict.fromkeys("".join(terms) + output)
+        modes = {label: mode for mode, label in enumerate(labels)}
+        operands = []
+        for tensor, term in zip(tensors, terms):
+            operands.extend((cp.asarray(tensor), [modes[label] for label in term]))
+        operands.append([modes[label] for label in output])
+        kwargs = {"optimize": optimize} if optimize is not None else {}
+        return contract(*operands, **kwargs)
+
+    if backend != "opt_einsum":
+        raise ValueError(
+            f"Unknown contraction backend {backend!r}; expected 'opt_einsum' "
+            "or 'cuquantum'"
+        )
+
     import opt_einsum as oe
 
     return oe.contract(einsum_expr, *tensors, optimize=optimize or "auto")
@@ -413,24 +443,25 @@ class CircuitToEinsum:
     ) -> List[Tuple[str, np.ndarray]]:
         """Build the forward (ket) tensor network ``U|0…0⟩`` as ``[(index_str, tensor)]``.
 
-        The first entry is the initial state; the rest are the gate tensors in
-        application order. The free (frontier) index of qubit ``q`` after the last
-        gate is ``einsum_data["final_indices"][q]``.
+        The default ``|0…0⟩`` is represented as one rank-one tensor per qubit,
+        avoiding an unnecessary ``2**n`` allocation. A custom initial state remains
+        one dense rank-``n`` tensor. The remaining entries are gate tensors in
+        application order.
         """
         n_qubits = self.n_qubits
 
+        init_indices = list(einsum_data["initial_indices"].values())
         if initial_state is None:
-            state = np.zeros(2**n_qubits, dtype=complex)
-            state[0] = 1.0
+            zero = np.array([1.0, 0.0], dtype=complex)
+            terms = [(index, zero.copy()) for index in init_indices]
         else:
             state = np.asarray(initial_state, dtype=complex)
             if state.shape != (2**n_qubits,):
                 raise ValueError(
                     "initial_state must be a flat statevector of length 2**n_qubits"
                 )
+            terms = [("".join(init_indices), state.reshape([2] * n_qubits))]
 
-        init_idx_str = "".join(einsum_data["initial_indices"].values())
-        terms: List[Tuple[str, np.ndarray]] = [(init_idx_str, state.reshape([2] * n_qubits))]
         for op in einsum_data["operations"]:
             gate_str = op["einsum"].split(",")[1]
             terms.append((gate_str, op["tensor"]))
@@ -467,17 +498,17 @@ class CircuitToEinsum:
         init = self.index_manager.init_qubits()
 
         if initial_state is None:
-            state = np.zeros(2**n_qubits, dtype=complex)
-            state[0] = 1.0
+            zero = np.array([1.0, 0.0], dtype=complex)
+            terms = [(init[q], zero.copy()) for q in range(n_qubits)]
         else:
             state = np.asarray(initial_state, dtype=complex)
             if state.shape != (2**n_qubits,):
                 raise ValueError(
                     "initial_state must be a flat statevector of length 2**n_qubits"
                 )
+            init_str = "".join(init[q] for q in range(n_qubits))
+            terms = [(init_str, state.reshape([2] * n_qubits))]
 
-        init_str = "".join(init[q] for q in range(n_qubits))
-        terms: List[Tuple[str, np.ndarray]] = [(init_str, state.reshape([2] * n_qubits))]
         frontier = dict(init)
         batch_index: Optional[str] = None
 

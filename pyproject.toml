@@ -19,6 +19,7 @@ dependencies = [
   "pennylane>=0.37",
   "numpy>=1.23",
   "opt_einsum>=3.3.0",
+  "autoray<0.8; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +28,15 @@ dev = [
 ]
 torch = [
     "torch>=2.8.0",
+]
+cuquantum = [
+    "cupy-cuda12x>=13.0; python_version >= '3.11'",
+    "cuquantum-python-cu12>=25.3; python_version >= '3.11'",
+]
+benchmark = [
+    "cotengra>=0.7,<0.8; python_version >= '3.11'",
+    "pennylane-lightning-gpu>=0.42,<0.43; python_version >= '3.11'",
+    "quimb>=1.11; python_version >= '3.11'",
 ]
 
 [project.urls]
