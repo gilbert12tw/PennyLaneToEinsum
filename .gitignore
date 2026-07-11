@@ -137,6 +137,8 @@ dmypy.json
 .pytest_cache/
 .coverage
 htmlcov/
+AGENTS.md
+CLAUDE.md
 
 # Temporary files
 *.tmp

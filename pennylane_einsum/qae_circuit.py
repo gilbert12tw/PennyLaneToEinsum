@@ -17,17 +17,17 @@ def make_parameters(n_qubits: int, layers: int, seed: int = 2026):
 
 def qae_circuit(inputs: np.ndarray, weights: np.ndarray) -> None:
     """QAE-Net Fig. 1 circuit with a scalable linear CNOT chain."""
-    n_qubits = inputs.shape[0]
-    if inputs.shape != (n_qubits, 3):
-        raise ValueError("inputs must have shape (n_qubits, 3)")
+    if inputs.ndim not in (2, 3) or inputs.shape[-1] != 3:
+        raise ValueError("inputs must have shape (n_qubits, 3) or (batch, n_qubits, 3)")
+    n_qubits = inputs.shape[-2]
     if weights.ndim != 3 or weights.shape[1:] != (n_qubits, 3):
         raise ValueError("weights must have shape (layers, n_qubits, 3)")
 
     for q in range(n_qubits):
         qml.Hadamard(wires=q)
-        qml.RZ(inputs[q, 0], wires=q)
-        qml.RY(inputs[q, 1], wires=q)
-        qml.RZ(inputs[q, 2], wires=q)
+        qml.RZ(inputs[..., q, 0], wires=q)
+        qml.RY(inputs[..., q, 1], wires=q)
+        qml.RZ(inputs[..., q, 2], wires=q)
 
     for layer in range(weights.shape[0]):
         for q in range(n_qubits):

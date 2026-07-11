@@ -61,22 +61,15 @@ def contract_einsum(
         try:
             import cupy as cp
             from cuquantum.tensornet import contract
+            from .cuquantum_backend import _integer_operands
         except ImportError as exc:
             raise ImportError(
                 "The cuquantum backend requires the 'cuquantum' extra; "
                 "install it with: uv sync --extra cuquantum"
             ) from exc
 
-        inputs, output = einsum_expr.split("->")
-        terms = inputs.split(",")
-        if len(terms) != len(tensors):
-            raise ValueError("einsum expression and tensor count do not match")
-        labels = dict.fromkeys("".join(terms) + output)
-        modes = {label: mode for mode, label in enumerate(labels)}
-        operands = []
-        for tensor, term in zip(tensors, terms):
-            operands.extend((cp.asarray(tensor), [modes[label] for label in term]))
-        operands.append([modes[label] for label in output])
+        device_tensors = [cp.asarray(tensor) for tensor in tensors]
+        operands = _integer_operands(einsum_expr, device_tensors)
         kwargs = {"optimize": optimize} if optimize is not None else {}
         return contract(*operands, **kwargs)
 

@@ -36,6 +36,7 @@ cuquantum = [
 benchmark = [
     "cotengra>=0.7,<0.8; python_version >= '3.11'",
     "pennylane-lightning-gpu>=0.42,<0.43; python_version >= '3.11'",
+    "pennylane-lightning-tensor>=0.42,<0.43; python_version >= '3.11'",
     "quimb>=1.11; python_version >= '3.11'",
 ]
 

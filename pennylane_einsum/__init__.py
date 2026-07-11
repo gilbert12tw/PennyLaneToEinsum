@@ -6,12 +6,14 @@ from .circuit_to_einsum import (
     normalize_observable,
 )
 from .exceptions import UnsupportedOperationError
+from .cuquantum_backend import CuQuantumContractor
 from .index_manager import IndexManager
 from .learnable_observable import PauliDirectionObservable
 
 __version__ = "0.1.0"
 __all__ = [
     "CircuitToEinsum",
+    "CuQuantumContractor",
     "contract_einsum",
     "expectation_value",
     "normalize_observable",

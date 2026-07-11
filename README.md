@@ -32,6 +32,37 @@ result = contract_einsum(expr, tensors, optimize="optimal")
 print(result.reshape(-1))
 ```
 
+## cuQuantum Contraction
+
+The one-shot GPU backend transfers operands and plans a new contraction on every
+call:
+
+```python
+result = contract_einsum(expr, tensors, backend="cuquantum")
+```
+
+For repeated execution of one topology, transfer tensors once and reuse the
+cuTensorNet path and workspace:
+
+```python
+import cupy as cp
+from pennylane_einsum import CuQuantumContractor
+
+device_tensors = [cp.asarray(tensor) for tensor in tensors]
+with CuQuantumContractor(expr, device_tensors) as contractor:
+    contractor.contract_path()
+    contractor.contract()  # warm-up
+    result = contractor.contract()
+
+    # New arrays with identical shape, stride, and dtype can reuse the plan.
+    contractor.reset_operands(updated_device_tensors)
+    updated_result = contractor.contract()
+```
+
+Install the optional backend with `uv sync --python 3.11 --extra cuquantum`.
+See `docs/qae_reuse_batching_report_zh.md` for separated H2D, planning, execution,
+PennyLane Lightning Tensor, and batching benchmarks.
+
 ## Batched Gate Parameters
 
 PennyLane parameter broadcasting is supported when `op.matrix()` returns a
@@ -155,8 +186,9 @@ uv run --extra dev pytest -q
 See `docs/implementation.md` for a walkthrough of the indexing strategy,
 tensor layout, and current limitations.
 
-See `docs/benchmarks.md` for the larger-circuit conversion benchmark, batch
-contraction benchmark, PennyLane comparison, and generated matplotlib plots.
+See `docs/benchmarks.md` for benchmark summaries and
+`docs/qae_reuse_batching_report_zh.md` for the current cuQuantum plan-reuse,
+PennyLane GPU, and batching experiments.
 
 ## Example
 
